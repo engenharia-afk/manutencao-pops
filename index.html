@@ -754,7 +754,7 @@ async function pushPopRemote(p){
       tecnico_id: p.tecnicoId || (currentUser ? currentUser.id : null), tecnico_nome: p.tecnicoNome || (currentUser ? currentUser.nome : null),
       visita_em: new Date(p.ts).toISOString(), updated_at: new Date().toISOString()
     };
-    const { error } = await sb.from('pops').upsert(row);
+    const { error } = await sb.from('manut_pops').upsert(row);
     if(error) throw error;
     return true;
   }catch(e){ return false; }
@@ -766,7 +766,7 @@ async function pushEquipRemote(popId, eq){
       fonte_a_v: eq.fonteA.v||0, fonte_a_a: eq.fonteA.a||0, fonte_b_v: eq.fonteB.v||0, fonte_b_a: eq.fonteB.a||0,
       obs: eq.obs || '', fotos: eq.fotos || (eq.foto ? [eq.foto] : [])
     };
-    const { error } = await sb.from('equipamentos').upsert(row);
+    const { error } = await sb.from('manut_equipamentos').upsert(row);
     if(error) throw error;
     return true;
   }catch(e){ return false; }
@@ -777,14 +777,14 @@ async function pushBateriaRemote(popId, bt){
       id: bt.id, pop_id: popId, nome: bt.nome, capacidade: bt.capacidade||0, tensao_nominal: bt.tensaoNominal||0,
       tensao_medida: bt.tensaoMedida||0, corrente: bt.corrente||0, obs: bt.obs || '', foto: bt.foto || null
     };
-    const { error } = await sb.from('testes_bateria').upsert(row);
+    const { error } = await sb.from('manut_baterias').upsert(row);
     if(error) throw error;
     return true;
   }catch(e){ return false; }
 }
-async function deletePopRemote(id){ try{ await sb.from('pops').delete().eq('id', id); }catch(e){} }
-async function deleteEquipRemote(id){ try{ await sb.from('equipamentos').delete().eq('id', id); }catch(e){} }
-async function deleteBateriaRemote(id){ try{ await sb.from('testes_bateria').delete().eq('id', id); }catch(e){} }
+async function deletePopRemote(id){ try{ await sb.from('manut_pops').delete().eq('id', id); }catch(e){} }
+async function deleteEquipRemote(id){ try{ await sb.from('manut_equipamentos').delete().eq('id', id); }catch(e){} }
+async function deleteBateriaRemote(id){ try{ await sb.from('manut_baterias').delete().eq('id', id); }catch(e){} }
 
 async function syncPopFull(p){
   setSyncStatus('pending');
@@ -798,11 +798,11 @@ async function syncPopFull(p){
 
 /* ---- Pull: bring remote data into local cache ---- */
 async function pullAllFromRemote(){
-  const { data: remotePops, error: e1 } = await sb.from('pops').select('*');
+  const { data: remotePops, error: e1 } = await sb.from('manut_pops').select('*');
   if(e1) throw e1;
-  const { data: remoteEquip, error: e2 } = await sb.from('equipamentos').select('*');
+  const { data: remoteEquip, error: e2 } = await sb.from('manut_equipamentos').select('*');
   if(e2) throw e2;
-  const { data: remoteBateria, error: e3 } = await sb.from('testes_bateria').select('*');
+  const { data: remoteBateria, error: e3 } = await sb.from('manut_baterias').select('*');
   if(e3) throw e3;
 
   const merged = (remotePops||[]).map(rp=>{
