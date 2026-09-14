@@ -51,10 +51,10 @@
   .stat-num{font-family:var(--mono); font-size:18px; font-weight:700; color:var(--cyan);}
   .stat-label{font-size:10.5px; color:var(--text-muted); margin-top:2px;}
 
-  .filter-row{display:flex; gap:8px; padding: 12px 16px 4px;}
+  .filter-row{display:flex; flex-wrap:wrap; gap:8px; padding: 12px 16px 4px;}
   .filter-row input[type=text]{
     background:var(--bg-elev); border:1px solid var(--line); color:var(--text);
-    border-radius:9px; padding:9px 11px; font-size:13.5px; flex:1; min-width:0;
+    border-radius:9px; padding:9px 11px; font-size:13.5px; flex:1 1 100%; min-width:0;
   }
 
   #view-list{padding: 4px 16px 20px;}
@@ -245,7 +245,7 @@
   }
   .tech-info b{font-size:13.5px; display:block;}
   .tech-info span{font-size:11.5px; color:var(--text-muted);}
-  .filter-row select{margin-top:8px; width:100%; display:none;}
+  .filter-row select{flex:1 1 100%; display:none; background:var(--bg-elev); border:1px solid var(--line); color:var(--text); border-radius:9px; padding:9px 11px; font-size:13.5px;}
   .filter-row select.show{display:block;}
   .act-item{background:var(--bg-elev); border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:8px; cursor:pointer;}
   .act-top{display:flex; align-items:center; justify-content:space-between; gap:8px;}
@@ -306,7 +306,7 @@
           </div>
           <div>
             <div class="brand-title">Manutenção de POPs</div>
-            <div class="brand-sub">DGF · visitas preventivas</div>
+            <div class="brand-sub">DGF · visitas preventivas · <span id="app-version">v3</span></div>
           </div>
         </div>
         <div style="display:flex; gap:8px;">
@@ -728,7 +728,7 @@ async function afterLogin(){
   loadPops();
   renderList();
   setSyncStatus('pending');
-  pullAllFromRemote().then(()=>{ renderList(); setSyncStatus('online'); }).catch(()=> setSyncStatus('offline'));
+  pullAllFromRemote().then(()=>{ renderList(); setSyncStatus('online'); }).catch((e)=>{ setSyncStatus('offline'); showToast(syncErrorMessage(e)); });
 }
 
 async function checkSessionOnLoad(){
@@ -745,6 +745,7 @@ async function checkSessionOnLoad(){
 }
 
 /* ---- Remote sync: push local records to Supabase ---- */
+let lastSyncError = null;
 async function pushPopRemote(p){
   try{
     const row = {
@@ -757,7 +758,7 @@ async function pushPopRemote(p){
     const { error } = await sb.from('manut_pops').upsert(row);
     if(error) throw error;
     return true;
-  }catch(e){ return false; }
+  }catch(e){ lastSyncError = e; return false; }
 }
 async function pushEquipRemote(popId, eq){
   try{
@@ -769,7 +770,7 @@ async function pushEquipRemote(popId, eq){
     const { error } = await sb.from('manut_equipamentos').upsert(row);
     if(error) throw error;
     return true;
-  }catch(e){ return false; }
+  }catch(e){ lastSyncError = e; return false; }
 }
 async function pushBateriaRemote(popId, bt){
   try{
@@ -780,7 +781,7 @@ async function pushBateriaRemote(popId, bt){
     const { error } = await sb.from('manut_baterias').upsert(row);
     if(error) throw error;
     return true;
-  }catch(e){ return false; }
+  }catch(e){ lastSyncError = e; return false; }
 }
 async function deletePopRemote(id){ try{ await sb.from('manut_pops').delete().eq('id', id); }catch(e){} }
 async function deleteEquipRemote(id){ try{ await sb.from('manut_equipamentos').delete().eq('id', id); }catch(e){} }
@@ -827,6 +828,18 @@ async function pullAllFromRemote(){
   // Keep any local-only pops not yet on the server (created while offline)
   const remoteIds = new Set(merged.map(p=>p.id));
   const localOnly = pops.filter(p=> !remoteIds.has(p.id));
+  // For pops that exist on both sides, keep local equipment/battery items the
+  // server doesn't have yet (their upload may have failed) — never drop local data.
+  merged.forEach(rp=>{
+    const lp = pops.find(p=>p.id===rp.id);
+    if(!lp) return;
+    const eqIds = new Set(rp.equipamentos.map(e=>e.id));
+    (lp.equipamentos||[]).forEach(e=>{ if(!eqIds.has(e.id)) rp.equipamentos.push(e); });
+    const btIds = new Set(rp.testesBateria.map(b=>b.id));
+    (lp.testesBateria||[]).forEach(b=>{ if(!btIds.has(b.id)) rp.testesBateria.push(b); });
+    if(!rp.fotoAntes && lp.fotoAntes) rp.fotoAntes = lp.fotoAntes;
+    if(!rp.fotoDepois && lp.fotoDepois) rp.fotoDepois = lp.fotoDepois;
+  });
   pops = [...merged, ...localOnly];
   savePops();
 }
@@ -834,15 +847,31 @@ async function pullAllFromRemote(){
 async function manualSync(){
   setSyncStatus('pending');
   try{
-    for(const p of pops){ await syncPopFull(p); }
+    lastSyncError = null;
+    let falhas = 0;
+    for(const p of pops){ if(!(await syncPopFull(p))) falhas++; }
     await pullAllFromRemote();
     renderList();
-    setSyncStatus('online');
-    showToast('Sincronizado.');
+    if(falhas > 0){
+      setSyncStatus('pending');
+      showToast(`${falhas} visita(s) não enviada(s): ` + syncErrorMessage(lastSyncError));
+    } else {
+      setSyncStatus('online');
+      showToast('Sincronizado.');
+    }
   }catch(e){
     setSyncStatus('offline');
-    showToast('Sem conexão — tente novamente mais tarde.');
+    showToast(syncErrorMessage(e));
   }
+}
+function syncErrorMessage(e){
+  const code = e && e.code, msg = (e && e.message) || '';
+  if(code === '42P01' || /does not exist|schema cache/i.test(msg)) return 'Tabelas não encontradas no Supabase — rode o script 05_tabelas_manutencao.sql.';
+  if(code === '42501' || /permission|policy|row-level/i.test(msg)) return 'Sem permissão no Supabase — verifique as policies (script 05).';
+  if(code === '23503') return 'Técnico sem perfil cadastrado (tabela profiles).';
+  if(code === 'PGRST204' || /column .* does not exist|Could not find the '.*' column/i.test(msg)) return 'Coluna não encontrada — versão do app diferente do banco.';
+  if(code === 'PGRST301' || /JWT|expired|not authenticated/i.test(msg)) return 'Sessão expirada — saia e entre de novo.';
+  return 'Sem conexão — tente novamente mais tarde.';
 }
 
 /* ---- Admin panel ---- */
