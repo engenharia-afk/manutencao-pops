@@ -1,8 +1,5 @@
 {
-  "name": "manutencao-pops",
-  "version": "1.0.0",
-  "private": true,
-  "scripts": {
-    "start": "npx --yes serve -s . -l $PORT"
-  }
+  "headers": [
+    { "source": "**/*", "headers": [ { "key": "Cache-Control", "value": "no-cache" } ] }
+  ]
 }
