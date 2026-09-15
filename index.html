@@ -306,7 +306,7 @@
           </div>
           <div>
             <div class="brand-title">Manutenção de POPs</div>
-            <div class="brand-sub">DGF · visitas preventivas · <span id="app-version">v5</span></div>
+            <div class="brand-sub">DGF · visitas preventivas · <span id="app-version">v6</span></div>
           </div>
         </div>
         <div style="display:flex; gap:8px;">
@@ -690,6 +690,7 @@ function setSyncStatus(state){
   pill.classList.remove('online','pending');
   if(state === 'online'){ pill.classList.add('online'); text.textContent = 'sincronizado'; }
   else if(state === 'pending'){ pill.classList.add('pending'); text.textContent = 'pendente · tocar p/ tentar'; }
+  else if(state === 'auth'){ pill.classList.add('pending'); text.textContent = 'entrar p/ sincronizar'; }
   else { text.textContent = 'offline · tocar p/ tentar'; }
 }
 
@@ -762,19 +763,25 @@ async function afterLogin(session){
   await loadPops();
   renderList();
   setSyncStatus('pending');
-  pullAllFromRemote().then(()=>{ renderList(); setSyncStatus('online'); }).catch((e)=>{ setSyncStatus('offline'); showToast(syncErrorMessage(e)); });
+  if(resyncAfterLogin){ resyncAfterLogin = false; await manualSync(); }
+  else pullAllFromRemote().then(()=>{ renderList(); setSyncStatus('online'); }).catch((e)=>{ setSyncStatus('offline'); showToast(syncErrorMessage(e)); });
   maybeRestoreDraft();
 }
 
 /* Sem internet e sem sessão válida: entra com o último usuário para não
    bloquear o trabalho em campo. O envio acontece quando voltar a conexão. */
-async function enterOfflineMode(cached){
+async function enterOfflineMode(cached, motivo){
   currentUser = cached;
   showMainUI();
   await loadPops();
   renderList();
-  setSyncStatus('offline');
-  showToast('Sem internet — trabalhando offline. Sincronize quando a conexão voltar.');
+  if(motivo === 'auth'){
+    setSyncStatus('auth');
+    showToast('Sua sessão expirou, mas os dados estão salvos no aparelho. Toque em "entrar p/ sincronizar" quando quiser enviar.');
+  } else {
+    setSyncStatus('offline');
+    showToast('Sem internet — trabalhando offline. Sincronize quando a conexão voltar.');
+  }
   maybeRestoreDraft();
 }
 
@@ -786,8 +793,20 @@ async function checkSessionOnLoad(){
 
   let cached = null; try{ cached = await kv.get('lastUser'); }catch(e){}
   const semRede = !navigator.onLine || (err && /fetch|network|failed|retry/i.test((err.message||'') + ' ' + (err.name||'')));
-  if(cached && semRede){ await enterOfflineMode(cached); return; }
+  if(cached){ await enterOfflineMode(cached, semRede ? 'rede' : 'auth'); return; }
   document.getElementById('view-login').style.display = 'flex';
+}
+
+/* Sessão expirada: abre o login sem mexer nos dados locais; ao entrar, sincroniza. */
+let resyncAfterLogin = false;
+function showLoginForResync(){
+  resyncAfterLogin = true;
+  document.getElementById('login-email').value = currentUser ? (currentUser.email || '') : '';
+  document.getElementById('login-password').value = '';
+  document.getElementById('view-list').style.display = 'none';
+  document.getElementById('bottom-bar-list').style.display = 'none';
+  document.getElementById('view-login').style.display = 'flex';
+  showToast('Entre novamente para enviar os dados. Nada foi perdido.');
 }
 
 /* ---- Remote sync: push local records to Supabase ---- */
@@ -891,6 +910,12 @@ async function pullAllFromRemote(){
 }
 
 async function manualSync(){
+  let session = null;
+  try{ const r = await sb.auth.getSession(); session = r.data && r.data.session; }catch(e){}
+  if(!session){
+    if(!navigator.onLine){ setSyncStatus('offline'); showToast('Sem internet — tente quando a conexão voltar.'); return; }
+    showLoginForResync(); return;
+  }
   setSyncStatus('pending');
   try{
     lastSyncError = null;
