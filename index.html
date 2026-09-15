@@ -306,7 +306,7 @@
           </div>
           <div>
             <div class="brand-title">Manutenção de POPs</div>
-            <div class="brand-sub">DGF · visitas preventivas · <span id="app-version">v3</span></div>
+            <div class="brand-sub">DGF · visitas preventivas · <span id="app-version">v4</span></div>
           </div>
         </div>
         <div style="display:flex; gap:8px;">
@@ -649,6 +649,30 @@
   <div id="print-report"></div>
 
 <script>
+/* ================= ARMAZENAMENTO LOCAL (IndexedDB) =================
+   O localStorage tem limite de ~5 MB; com fotos em base64 ele enche
+   rápido, o app para de salvar e até a sessão do Supabase (que também
+   mora no localStorage) se perde. Por isso os dados ficam no IndexedDB. */
+const kv = (()=>{
+  let dbp = null;
+  function open(){
+    if(dbp) return dbp;
+    dbp = new Promise((res, rej)=>{
+      if(!window.indexedDB){ rej(new Error('IndexedDB indisponível')); return; }
+      const r = indexedDB.open('dgf_manutencao', 1);
+      r.onupgradeneeded = ()=> r.result.createObjectStore('kv');
+      r.onsuccess = ()=> res(r.result);
+      r.onerror = ()=> rej(r.error);
+      r.onblocked = ()=> rej(new Error('IndexedDB bloqueado'));
+    });
+    return dbp;
+  }
+  async function get(k){ const db = await open(); return new Promise((res,rej)=>{ const q = db.transaction('kv','readonly').objectStore('kv').get(k); q.onsuccess=()=>res(q.result); q.onerror=()=>rej(q.error); }); }
+  async function set(k,v){ const db = await open(); return new Promise((res,rej)=>{ const t = db.transaction('kv','readwrite'); t.objectStore('kv').put(v,k); t.oncomplete=()=>res(); t.onerror=()=>rej(t.error); t.onabort=()=>rej(t.error); }); }
+  async function del(k){ const db = await open(); return new Promise((res,rej)=>{ const t = db.transaction('kv','readwrite'); t.objectStore('kv').delete(k); t.oncomplete=()=>res(); t.onerror=()=>rej(t.error); }); }
+  return { get, set, del };
+})();
+
 /* ================= AUTH & SYNC (Supabase) ================= */
 const SUPABASE_URL = 'https://wggmllnfmhniqkaxwlgg.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_eYs17QwoGLFNNFwNKyokRA_MbO3u7-R';
@@ -687,7 +711,7 @@ async function doLogin(){
       document.getElementById('btn-login').textContent = 'Entrar';
       return;
     }
-    await afterLogin();
+    await afterLogin(data.session);
   }catch(e){
     errBox.textContent = 'Sem conexão com a internet. É preciso estar online para entrar pela primeira vez.';
     errBox.style.display = 'block';
@@ -697,7 +721,8 @@ async function doLogin(){
 
 async function doLogout(){
   if(!confirm('Sair da conta?')) return;
-  await sb.auth.signOut();
+  try{ await sb.auth.signOut(); }catch(e){}
+  try{ await kv.del('lastUser'); }catch(e){}
   currentUser = null;
   document.getElementById('view-login').style.display = 'flex';
   document.getElementById('view-list').style.display = 'none';
@@ -707,41 +732,62 @@ async function doLogout(){
 }
 
 async function fetchProfile(userId, email){
-  const { data, error } = await sb.from('profiles').select('nome, role').eq('id', userId).single();
-  if(error || !data) return { nome: email, role: 'tecnico' };
-  return data;
+  try{
+    const { data, error } = await sb.from('profiles').select('nome, role').eq('id', userId).single();
+    if(error || !data) return null;
+    return data;
+  }catch(e){ return null; }
 }
-
-async function afterLogin(){
-  const { data: { user } } = await sb.auth.getUser();
-  if(!user){ return; }
-  const profile = await fetchProfile(user.id, user.email);
-  currentUser = { id: user.id, email: user.email, nome: profile.nome, role: profile.role };
-
+function showMainUI(){
   document.getElementById('view-login').style.display = 'none';
   document.getElementById('view-list').style.display = 'block';
   document.getElementById('bottom-bar-list').style.display = 'flex';
   document.getElementById('user-name-display').textContent = currentUser.nome + (currentUser.role === 'admin' ? ' · admin' : '');
   document.getElementById('btn-admin-icon').style.display = currentUser.role === 'admin' ? 'flex' : 'none';
   document.getElementById('filter-tecnico').classList.toggle('show', currentUser.role === 'admin');
+}
 
-  loadPops();
+async function afterLogin(session){
+  let user = session && session.user;
+  try{ const { data } = await sb.auth.getUser(); if(data && data.user) user = data.user; }catch(e){}
+  if(!user){ document.getElementById('view-login').style.display = 'flex'; return; }
+
+  let cached = null; try{ cached = await kv.get('lastUser'); }catch(e){}
+  let profile = await fetchProfile(user.id, user.email);
+  if(!profile) profile = (cached && cached.id === user.id) ? cached : { nome: user.email, role: 'tecnico' };
+  currentUser = { id: user.id, email: user.email, nome: profile.nome, role: profile.role };
+  try{ await kv.set('lastUser', currentUser); }catch(e){}
+
+  showMainUI();
+  await loadPops();
   renderList();
   setSyncStatus('pending');
   pullAllFromRemote().then(()=>{ renderList(); setSyncStatus('online'); }).catch((e)=>{ setSyncStatus('offline'); showToast(syncErrorMessage(e)); });
+  maybeRestoreDraft();
+}
+
+/* Sem internet e sem sessão válida: entra com o último usuário para não
+   bloquear o trabalho em campo. O envio acontece quando voltar a conexão. */
+async function enterOfflineMode(cached){
+  currentUser = cached;
+  showMainUI();
+  await loadPops();
+  renderList();
+  setSyncStatus('offline');
+  showToast('Sem internet — trabalhando offline. Sincronize quando a conexão voltar.');
+  maybeRestoreDraft();
 }
 
 async function checkSessionOnLoad(){
-  try{
-    const { data: { session } } = await sb.auth.getSession();
-    if(session){
-      await afterLogin();
-    } else {
-      document.getElementById('view-login').style.display = 'flex';
-    }
-  }catch(e){
-    document.getElementById('view-login').style.display = 'flex';
-  }
+  let session = null, err = null;
+  try{ const r = await sb.auth.getSession(); session = r.data && r.data.session; err = r.error; }
+  catch(e){ err = e; }
+  if(session){ await afterLogin(session); return; }
+
+  let cached = null; try{ cached = await kv.get('lastUser'); }catch(e){}
+  const semRede = !navigator.onLine || (err && /fetch|network|failed|retry/i.test((err.message||'') + ' ' + (err.name||'')));
+  if(cached && semRede){ await enterOfflineMode(cached); return; }
+  document.getElementById('view-login').style.display = 'flex';
 }
 
 /* ---- Remote sync: push local records to Supabase ---- */
@@ -1017,14 +1063,107 @@ let currentGPS = null;
 let currentFotoAntes = null;
 let currentFotoDepois = null;
 
-function loadPops(){
-  try{ const raw = localStorage.getItem(STORAGE_KEY); pops = raw ? JSON.parse(raw) : []; }
-  catch(e){ pops = []; }
+async function loadPops(){
+  let fromIdb = null, fromLs = null;
+  try{ fromIdb = await kv.get('pops'); }catch(e){}
+  try{ const raw = localStorage.getItem(STORAGE_KEY); fromLs = raw ? JSON.parse(raw) : null; }catch(e){}
+
+  if(Array.isArray(fromIdb) && fromIdb.length){
+    pops = fromIdb;
+    // versão antiga guardava no localStorage: traz o que ainda não estiver no IndexedDB
+    if(Array.isArray(fromLs)){ const ids = new Set(pops.map(p=>p.id)); fromLs.forEach(p=>{ if(!ids.has(p.id)) pops.push(p); }); }
+  } else if(Array.isArray(fromLs)){
+    pops = fromLs;
+  } else {
+    pops = [];
+  }
+  // migra para o IndexedDB e libera o localStorage (a sessão do Supabase precisa desse espaço)
+  if(Array.isArray(fromLs)){
+    try{ await kv.set('pops', pops); localStorage.removeItem(STORAGE_KEY); }catch(e){}
+  }
 }
 function savePops(){
-  try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(pops)); }
-  catch(e){ showToast('Armazenamento cheio — exporte um backup e libere espaço.'); }
+  kv.set('pops', pops).catch(()=>{
+    // IndexedDB indisponível (navegador anônimo etc.): tenta o localStorage
+    try{ localStorage.setItem(STORAGE_KEY, JSON.stringify(pops)); }
+    catch(e){ showToast('Não foi possível salvar no aparelho — exporte um backup.'); }
+  });
 }
+
+/* ---------------- Rascunho automático ----------------
+   Tudo que está sendo digitado (POP, equipamento ou banco) é guardado a cada
+   alteração. Se a página recarregar (câmera, memória, queda de sessão), o
+   cadastro é oferecido de volta ao entrar. */
+const DRAFT_KEY = 'draft';
+let draftTimer = null;
+function _v(id){ const el = document.getElementById(id); return el ? el.value : ''; }
+function _sv(id, v){ const el = document.getElementById(id); if(el) el.value = (v===undefined||v===null) ? '' : v; }
+function _vis(id){ return document.getElementById(id).style.display === 'block'; }
+function currentFormView(){
+  if(_vis('view-equip')) return 'equip';
+  if(_vis('view-bateria')) return 'bateria';
+  if(_vis('view-pop')) return 'pop';
+  return null;
+}
+function snapshotDraft(){
+  const view = currentFormView();
+  if(!view || !currentPopId) return;
+  const d = { view, popId: currentPopId, savedAt: Date.now(),
+    pop: { nome: _v('p-nome'), obs: _v('p-obs'), gps: currentGPS, fotoAntes: currentFotoAntes, fotoDepois: currentFotoDepois } };
+  if(view === 'equip'){
+    d.equip = { id: _v('e-id'), nome: _v('e-nome'), modelo: _v('e-modelo'), faV: _v('fa-v'), faA: _v('fa-a'), fbV: _v('fb-v'), fbA: _v('fb-a'),
+      obs: _v('e-obs'), temFonteB: document.getElementById('switch-fonteB').classList.contains('on'), fotos: currentEquipPhotos.slice() };
+  }
+  if(view === 'bateria'){
+    d.bateria = { id: _v('bt-id'), nome: _v('bt-nome'), capacidade: _v('bt-capacidade'), tensaoNominal: _v('bt-tensao-nominal'),
+      tensaoMedida: _v('bt-tensao-medida'), corrente: _v('bt-corrente'), obs: _v('bt-obs'), foto: currentBateriaPhoto };
+  }
+  kv.set(DRAFT_KEY, d).catch(()=>{});
+}
+function scheduleDraft(){ clearTimeout(draftTimer); draftTimer = setTimeout(snapshotDraft, 300); }
+function clearDraft(){ clearTimeout(draftTimer); kv.del(DRAFT_KEY).catch(()=>{}); }
+async function maybeRestoreDraft(){
+  let d = null;
+  try{ d = await kv.get(DRAFT_KEY); }catch(e){}
+  if(!d || !d.popId || !d.pop) return;
+  const when = new Date(d.savedAt).toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' });
+  const nome = d.pop.nome || (d.equip && d.equip.nome) || 'sem nome';
+  if(!confirm(`Há um cadastro em andamento que não foi salvo (${nome}, ${when}). Restaurar?`)){ clearDraft(); return; }
+
+  openPop(pops.some(p=>p.id===d.popId) ? d.popId : null);
+  currentPopId = d.popId;
+  _sv('p-nome', d.pop.nome); _sv('p-obs', d.pop.obs);
+  document.getElementById('pop-title-text').textContent = d.pop.nome || 'Nova visita';
+  if(d.pop.gps){ currentGPS = d.pop.gps; renderGPS(); }
+  if(d.pop.fotoAntes){ currentFotoAntes = d.pop.fotoAntes; setPhotoBox('antes', d.pop.fotoAntes); }
+  if(d.pop.fotoDepois){ currentFotoDepois = d.pop.fotoDepois; setPhotoBox('depois', d.pop.fotoDepois); }
+  renderEquipList(); renderBateriaList();
+
+  if(d.view === 'equip' && d.equip){
+    openEquip(d.equip.id || null);
+    _sv('e-id', d.equip.id); _sv('e-nome', d.equip.nome); _sv('e-modelo', d.equip.modelo);
+    _sv('fa-v', d.equip.faV); _sv('fa-a', d.equip.faA); _sv('fb-v', d.equip.fbV); _sv('fb-a', d.equip.fbA); _sv('e-obs', d.equip.obs);
+    document.getElementById('switch-fonteB').classList.toggle('on', !!d.equip.temFonteB);
+    document.getElementById('block-fonteB').style.display = d.equip.temFonteB ? 'block' : 'none';
+    currentEquipPhotos = (d.equip.fotos || []).slice();
+    renderEquipPhotoGallery(); calcPower();
+  }
+  if(d.view === 'bateria' && d.bateria){
+    openBateria(d.bateria.id || null);
+    _sv('bt-id', d.bateria.id); _sv('bt-nome', d.bateria.nome); _sv('bt-capacidade', d.bateria.capacidade);
+    _sv('bt-tensao-nominal', d.bateria.tensaoNominal); _sv('bt-tensao-medida', d.bateria.tensaoMedida);
+    _sv('bt-corrente', d.bateria.corrente); _sv('bt-obs', d.bateria.obs);
+    if(d.bateria.foto){ currentBateriaPhoto = d.bateria.foto; document.getElementById('bateria-photo-preview').innerHTML = `<img src="${d.bateria.foto}">`; }
+    calcAutonomia();
+  }
+  snapshotDraft();
+  showToast('Cadastro restaurado — confira e salve.');
+}
+['view-pop','view-equip','view-bateria'].forEach(id=>{
+  const el = document.getElementById(id);
+  el.addEventListener('input', scheduleDraft);
+  el.addEventListener('change', scheduleDraft);
+});
 function showToast(msg){
   const t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('show');
@@ -1141,6 +1280,7 @@ function openPop(id){
   window.scrollTo(0,0);
 }
 function closePop(){
+  clearDraft();
   document.getElementById('view-pop').style.display = 'none';
   document.getElementById('view-list').style.display = 'block';
   document.getElementById('bottom-bar-list').style.display = 'flex';
@@ -1160,6 +1300,7 @@ function captureGPS(){
   navigator.geolocation.getCurrentPosition(function(pos){
     currentGPS = { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy };
     renderGPS();
+    scheduleDraft();
     btn.textContent = 'Atualizar';
     showToast('Localização capturada.');
   }, function(err){
@@ -1184,6 +1325,7 @@ function handlePopPhoto(e, kind){
   compressImage(file, function(dataUrl){
     if(kind==='antes') currentFotoAntes = dataUrl; else currentFotoDepois = dataUrl;
     setPhotoBox(kind, dataUrl);
+    scheduleDraft();
   });
 }
 function compressImage(file, cb){
@@ -1275,6 +1417,7 @@ function toggleSourceB(){
   const on = !sw.classList.contains('on');
   sw.classList.toggle('on', on);
   document.getElementById('block-fonteB').style.display = on ? 'block' : 'none';
+  scheduleDraft();
 }
 function calcPower(){
   const av = parseFloat(document.getElementById('fa-v').value)||0;
@@ -1329,6 +1472,7 @@ function renderEquipPhotoGallery(){
   }
   gallery.innerHTML = html;
   document.getElementById('equip-photo-count').textContent = currentEquipPhotos.length + ' / 10 fotos';
+  scheduleDraft();
 }
 
 function openEquip(id){
@@ -1382,6 +1526,7 @@ function closeEquip(){
   document.getElementById('view-equip').style.display = 'none';
   document.getElementById('view-pop').style.display = 'block';
   renderEquipList();
+  scheduleDraft();
 }
 
 function ensurePopExists(){
@@ -1396,6 +1541,8 @@ function ensurePopExists(){
       fotoAntes: currentFotoAntes,
       fotoDepois: currentFotoDepois,
       obs: document.getElementById('p-obs').value.trim(),
+      tecnicoId: currentUser ? currentUser.id : null,
+      tecnicoNome: currentUser ? currentUser.nome : '',
       equipamentos: [],
       testesBateria: []
     };
@@ -1507,6 +1654,7 @@ function handleBateriaPhoto(e){
   compressImage(file, function(dataUrl){
     currentBateriaPhoto = dataUrl;
     document.getElementById('bateria-photo-preview').innerHTML = `<img src="${dataUrl}">`;
+    scheduleDraft();
   });
 }
 
@@ -1552,6 +1700,7 @@ function closeBateria(){
   document.getElementById('view-bateria').style.display = 'none';
   document.getElementById('view-pop').style.display = 'block';
   renderBateriaList();
+  scheduleDraft();
 }
 
 function saveBateria(){
