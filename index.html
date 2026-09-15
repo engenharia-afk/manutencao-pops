@@ -306,7 +306,7 @@
           </div>
           <div>
             <div class="brand-title">Manutenção de POPs</div>
-            <div class="brand-sub">DGF · visitas preventivas · <span id="app-version">v4</span></div>
+            <div class="brand-sub">DGF · visitas preventivas · <span id="app-version">v5</span></div>
           </div>
         </div>
         <div style="display:flex; gap:8px;">
@@ -380,7 +380,7 @@
         <div class="photo-pair">
           <div class="photo-slot">
             <div class="photo-slot-label">Como encontrou</div>
-            <div class="photo-box" onclick="document.getElementById('p-foto-antes').click()" id="box-foto-antes">
+            <div class="photo-box" onclick="snapshotDraft(); document.getElementById('p-foto-antes').click()" id="box-foto-antes">
               <div class="plus-hint">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M4 8a2 2 0 012-2h1.2a1 1 0 00.9-.55l.6-1.2A1 1 0 019.6 3.6h4.8a1 1 0 01.9.65l.6 1.2a1 1 0 00.9.55H18a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2V8z" stroke="#5c6773" stroke-width="1.5"/><circle cx="12" cy="13" r="3" stroke="#5c6773" stroke-width="1.5"/></svg>
                 <span>Antes</span>
@@ -390,7 +390,7 @@
           </div>
           <div class="photo-slot">
             <div class="photo-slot-label">Como ficou</div>
-            <div class="photo-box" onclick="document.getElementById('p-foto-depois').click()" id="box-foto-depois">
+            <div class="photo-box" onclick="snapshotDraft(); document.getElementById('p-foto-depois').click()" id="box-foto-depois">
               <div class="plus-hint">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M4 8a2 2 0 012-2h1.2a1 1 0 00.9-.55l.6-1.2A1 1 0 019.6 3.6h4.8a1 1 0 01.9.65l.6 1.2a1 1 0 00.9.55H18a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2V8z" stroke="#5c6773" stroke-width="1.5"/><circle cx="12" cy="13" r="3" stroke="#5c6773" stroke-width="1.5"/></svg>
                 <span>Depois</span>
@@ -559,7 +559,7 @@
 
       <div class="field">
         <label class="field-label">Foto do teste (display do multímetro / banco)</label>
-        <div class="photo-picker" onclick="document.getElementById('bt-foto').click()">
+        <div class="photo-picker" onclick="snapshotDraft(); document.getElementById('bt-foto').click()">
           <div class="photo-preview" id="bateria-photo-preview">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M4 8a2 2 0 012-2h1.2a1 1 0 00.9-.55l.6-1.2A1 1 0 019.6 3.6h4.8a1 1 0 01.9.65l.6 1.2a1 1 0 00.9.55H18a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2V8z" stroke="#5c6773" stroke-width="1.6"/><circle cx="12" cy="13" r="3.2" stroke="#5c6773" stroke-width="1.6"/></svg>
           </div>
@@ -1164,6 +1164,9 @@ async function maybeRestoreDraft(){
   el.addEventListener('input', scheduleDraft);
   el.addEventListener('change', scheduleDraft);
 });
+document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState === 'hidden') snapshotDraft(); });
+window.addEventListener('pagehide', snapshotDraft);
+window.addEventListener('blur', snapshotDraft);
 function showToast(msg){
   const t = document.getElementById('toast');
   t.textContent = msg; t.classList.add('show');
@@ -1220,7 +1223,7 @@ function renderList(){
     const thumb = p.fotoDepois || p.fotoAntes;
     html += `
       <div class="card" onclick="openPop('${p.id}')">
-        <div class="card-thumb">${thumb ? `<img src="${thumb}">` : svgPlaceholderPop()}</div>
+        <div class="card-thumb">${thumb ? `<img src="${thumb}" loading="lazy" decoding="async">` : svgPlaceholderPop()}</div>
         <div class="card-body">
           <div class="card-top">
             <div class="card-name">${escapeHtml(p.nome || 'Sem nome')}</div>
@@ -1401,7 +1404,7 @@ function renderEquipList(){
     const flags = equipFlags(eq);
     html += `
       <div class="equip-list-item" onclick="openEquip('${eq.id}')">
-        <div class="equip-thumb">${(eq.fotos && eq.fotos[0]) || eq.foto ? `<img src="${(eq.fotos && eq.fotos[0]) || eq.foto}">` : ''}</div>${(eq.fotos && eq.fotos.length>1) ? `<span class="badge" style="background:var(--bg-elev-2); color:var(--text-muted); align-self:center;">+${eq.fotos.length-1}</span>` : ''}
+        <div class="equip-thumb">${(eq.fotos && eq.fotos[0]) || eq.foto ? `<img src="${(eq.fotos && eq.fotos[0]) || eq.foto}" loading="lazy" decoding="async">` : ''}</div>${(eq.fotos && eq.fotos.length>1) ? `<span class="badge" style="background:var(--bg-elev-2); color:var(--text-muted); align-self:center;">+${eq.fotos.length-1}</span>` : ''}
         <div class="equip-info">
           <div class="equip-name">${escapeHtml(eq.nome)}${flags.desbalanceado ? ' <span class="badge badge-warn" style="margin-left:4px;">desbal.</span>' : ''}</div>
           <div class="equip-readings">A: ${fmtNum(eq.fonteA.a,2)}A / ${fmtNum(flags.pa,1)}W${eq.temFonteB ? `  ·  B: ${fmtNum(eq.fonteB.a,2)}A / ${fmtNum(flags.pb,1)}W` : ''}</div>
@@ -1454,18 +1457,18 @@ function renderEquipPhotoGallery(){
   const gallery = document.getElementById('equip-photo-gallery');
   let html = currentEquipPhotos.map((photo, i)=>`
     <div class="photo-gallery-tile">
-      <img src="${photo}">
+      <img src="${photo}" loading="lazy" decoding="async">
       <button class="photo-gallery-remove" onclick="removeEquipPhoto(${i})">
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M18 6L6 18M6 6l12 12" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>
       </button>
     </div>`).join('');
   if(currentEquipPhotos.length < 10){
     html += `
-    <div class="photo-gallery-add" onclick="document.getElementById('e-foto').click()">
+    <div class="photo-gallery-add" onclick="snapshotDraft(); document.getElementById('e-foto').click()">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 8a2 2 0 012-2h2l1.5-2h5L16 6h2a2 2 0 012 2v9a2 2 0 01-2 2H6a2 2 0 01-2-2V8z" stroke="#8b98a5" stroke-width="1.6" stroke-linejoin="round"/><circle cx="12" cy="12.5" r="3.2" stroke="#8b98a5" stroke-width="1.6"/></svg>
       <span>Câmera</span>
     </div>
-    <div class="photo-gallery-add" onclick="document.getElementById('e-foto-galeria').click()">
+    <div class="photo-gallery-add" onclick="snapshotDraft(); document.getElementById('e-foto-galeria').click()">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="4" y="5" width="16" height="14" rx="2" stroke="#8b98a5" stroke-width="1.6"/><path d="M4 16l4.5-4.5 3.5 3.5 2.5-2.5L20 17" stroke="#8b98a5" stroke-width="1.6" stroke-linejoin="round"/><circle cx="15.5" cy="9.5" r="1.5" fill="#8b98a5"/></svg>
       <span>Galeria</span>
     </div>`;
@@ -1623,7 +1626,7 @@ function renderBateriaList(){
     else if(flags.nivel==='baixo') badge = ' <span class="badge badge-warn" style="margin-left:4px;">baixo</span>';
     html += `
       <div class="equip-list-item" onclick="openBateria('${bt.id}')">
-        <div class="equip-thumb">${bt.foto ? `<img src="${bt.foto}">` : ''}</div>
+        <div class="equip-thumb">${bt.foto ? `<img src="${bt.foto}" loading="lazy" decoding="async">` : ''}</div>
         <div class="equip-info">
           <div class="equip-name">${escapeHtml(bt.nome)}${badge}</div>
           <div class="equip-readings">${fmtNum(bt.tensaoMedida,1)}V × ${fmtNum(bt.corrente,2)}A${flags.autonomiaMargem!==null ? `  ·  autonomia ≈ ${fmtNum(flags.autonomiaMargem,1)}h (nom. ${fmtNum(flags.autonomiaNominal,1)}h)` : ''}</div>
@@ -1687,7 +1690,7 @@ function openBateria(id){
       document.getElementById('bt-tensao-medida').value = bt.tensaoMedida||'';
       document.getElementById('bt-corrente').value = bt.corrente||'';
       document.getElementById('bt-obs').value = bt.obs||'';
-      if(bt.foto){ currentBateriaPhoto = bt.foto; document.getElementById('bateria-photo-preview').innerHTML = `<img src="${bt.foto}">`; }
+      if(bt.foto){ currentBateriaPhoto = bt.foto; document.getElementById('bateria-photo-preview').innerHTML = `<img src="${bt.foto}" loading="lazy" decoding="async">`; }
       document.getElementById('btn-delete-bateria').style.display = 'block';
       calcAutonomia();
     }
